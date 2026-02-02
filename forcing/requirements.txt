@@ -1,0 +1,9 @@
+numpy
+pandas
+rasterio
+xarray
+rioxarray
+geopandas
+netcdf4
+cftime
+pyproj
