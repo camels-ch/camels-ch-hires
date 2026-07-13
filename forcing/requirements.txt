@@ -1,9 +1,8 @@
 numpy
 pandas
-rasterio
-xarray
-rioxarray
+scipy
+shapely
 geopandas
+xarray
 netcdf4
-cftime
-pyproj
+h5py
