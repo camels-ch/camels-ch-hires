@@ -13,7 +13,7 @@ Any other regular-grid netCDF dataset, e.g. daily RhiresD-like files:
         --prefix RhiresD --units mm --coord-shift 0 0 --years 1961 2023
 
 Hourly statistics (mean, max, q10, q25, q50, q75, q90) of 5-min CombiPrecip:
-    python main.py 5min --years 2005 2024 --out-dir ./output
+    python main.py cpc5min --years 2005 2024 --out-dir ./output
 """
 
 import argparse
@@ -21,17 +21,6 @@ import logging
 
 from extract_cpc5min import extract_5min_stats
 from extract_netcdf import extract_from_netcdf
-
-METEO_DIR = (
-    "//hydroshare.giub.unibe.ch/data/Meteorology/Switzerland/"
-    "MeteoSwiss_gridded_products"
-)
-DEFAULT_HOURLY_DIR = f"{METEO_DIR}/CPCH_hourly"
-DEFAULT_CPC5MIN_DIR = f"{METEO_DIR}/CPCH_5min"
-DEFAULT_SHAPEFILE = (
-    "C:/Data/Projects/2026 Camels-ch-hires/GIS/Basins/"
-    "basisgeo_isobasins_4km2_merged_with_downstream.shp"
-)
 
 # The hourly CombiPrecip files use LV03-style coordinates; the CombiPrecip
 # LV95 grid is the same grid shifted by exactly +2'000'000 / +1'000'000 m.
@@ -49,7 +38,7 @@ def main():
         help="Extract time series from netCDF grids (defaults: hourly "
              "CombiPrecip).")
     parser_nc.add_argument(
-        "--data-dir", default=DEFAULT_HOURLY_DIR,
+        "--data-dir",
         help="Directory with the netCDF files.")
     parser_nc.add_argument(
         "--file-pattern", default="{year}{month:02d}.nc",
@@ -96,7 +85,7 @@ def main():
 
     for sub in (parser_nc, parser_cpc5min):
         sub.add_argument(
-            "--shapefile", default=DEFAULT_SHAPEFILE,
+            "--shapefile",
             help="Shapefile with the catchment polygons (EPSG:2056).")
         sub.add_argument(
             "--out-dir", default="./output",
