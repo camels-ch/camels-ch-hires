@@ -1,1 +1,1 @@
-hydro-snap==1.0.0
+hydro-snap==1.0.3

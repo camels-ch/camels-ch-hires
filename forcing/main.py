@@ -77,7 +77,7 @@ def main():
         "cpc5min",
         help="Extract hourly statistics from the 5-min CPCH zip files.")
     parser_cpc5min.add_argument(
-        "--data-dir", default=DEFAULT_CPC5MIN_DIR,
+        "--data-dir",
         help="Root of the <YYYY>/<YYDOY>/CPCH*.zip tree.")
     parser_cpc5min.add_argument(
         "--workers", type=int, default=4,
