@@ -41,6 +41,7 @@ def extract_from_netcdf(
     output_prefix: str | None = None,
     output_var: str | None = None,
     units: str = "",
+    threshold: float = 0.0,
     data_crs: int | None = None,
     coord_shift: tuple[float, float] = (0.0, 0.0),
     id_field: str = "EZGNR",
@@ -77,6 +78,10 @@ def extract_from_netcdf(
         Name of the variable in the output netCDF files (default: var_name).
     units
         Units of the variable, written to the output netCDF files.
+    threshold
+        Catchment values below this threshold are set to 0, to remove
+        small precipitation amounts. Use 0 (default) to disable; keep it
+        disabled for non-precipitation variables. NaNs are preserved.
     data_crs
         EPSG code of the data grid. If provided and different from the
         shapefile CRS, the polygons are reprojected before the weight
@@ -148,6 +153,9 @@ def extract_from_netcdf(
             continue
 
         df = pd.concat(frames)
+        if threshold > 0:
+            # Remove small precipitation amounts (NaNs are preserved).
+            df = df.mask(df < threshold, 0.0)
         if "csv" in out_paths:
             write_csv(df, out_paths["csv"])
         if "netcdf" in out_paths:
