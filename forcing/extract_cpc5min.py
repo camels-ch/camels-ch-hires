@@ -65,6 +65,7 @@ def extract_5min_stats(
     year_end: int,
     id_field: str = "EZGNR",
     formats: tuple[str, ...] = ("csv",),
+    threshold: float = 0.0,
     n_workers: int = 4,
     cache_dir: str | Path | None = None,
 ) -> None:
@@ -88,6 +89,11 @@ def extract_5min_stats(
         Shapefile attribute used as column names / catchment coordinate.
     formats
         Output formats, any of 'csv' and 'netcdf'.
+    threshold
+        Hours whose mean intensity is below this threshold are considered
+        dry: all their statistics are set to 0, to remove small
+        precipitation amounts. Use 0 (default) to disable. NaNs are
+        preserved.
     n_workers
         Number of parallel workers reading the daily zip files.
     cache_dir
@@ -112,11 +118,11 @@ def extract_5min_stats(
         nc_path = None
         if "csv" in formats:
             csv_paths = {
-                stat: out_dir / f"CPCH_5min_{stat}_{year}.csv"
+                stat: out_dir / f"CPC_5min_{stat}_{year}.csv"
                 for stat in STATS
             }
         if "netcdf" in formats:
-            nc_path = out_dir / f"CPCH_5min_stats_{year}.nc"
+            nc_path = out_dir / f"CPC_5min_stats_{year}.nc"
         expected = list(csv_paths.values()) + ([nc_path] if nc_path else [])
         if all(path.exists() for path in expected):
             logger.info(f"Skipping {year} (outputs already exist).")
@@ -167,6 +173,13 @@ def extract_5min_stats(
             values = np.vstack([s[i_stat] for s in stats_all])
             df = pd.DataFrame(values, index=index, columns=ids)
             frames[stat] = df[~df.index.duplicated()].reindex(full_index)
+
+        if threshold > 0:
+            # Hours with a mean below the threshold are considered dry: all
+            # their statistics are zeroed (NaNs are preserved).
+            dry = frames["mean"] < threshold
+            for stat in STATS:
+                frames[stat] = frames[stat].mask(dry, 0.0)
 
         for stat, path in csv_paths.items():
             write_csv(frames[stat], path)

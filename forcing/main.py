@@ -13,7 +13,7 @@ Any other regular-grid netCDF dataset, e.g. daily RhiresD-like files:
         --prefix RhiresD --units mm --coord-shift 0 0 --years 1961 2023
 
 Hourly statistics (mean, max, q10, q25, q50, q75, q90) of 5-min CombiPrecip:
-    python main.py 5min --years 2005 2024 --out-dir ./output
+    python main.py cpc5min --years 2005 2024 --out-dir ./output
 """
 
 import argparse
@@ -111,6 +111,12 @@ def main():
             "--format", nargs="+", choices=["csv", "netcdf"],
             default=["csv"], dest="formats",
             help="Output format(s): csv, netcdf or both (default: csv).")
+        sub.add_argument(
+            "--threshold", type=float, default=0,
+            help="Precipitation threshold in mm/h (default: disable): values "
+                 "below it are set to 0 (for cpc5min, all statistics of an "
+                 "hour whose mean is below it). Set to 0 to disable, e.g. "
+                 "for non-precipitation variables.")
 
     args = parser.parse_args()
 
@@ -140,6 +146,7 @@ def main():
             output_prefix=args.prefix,
             output_var=args.output_var,
             units=args.units,
+            threshold=args.threshold,
             data_crs=args.data_crs,
             coord_shift=coord_shift,
             id_field=args.id_field,
@@ -154,6 +161,7 @@ def main():
             year_end=args.years[1],
             id_field=args.id_field,
             formats=tuple(args.formats),
+            threshold=args.threshold,
             n_workers=args.workers,
         )
 
