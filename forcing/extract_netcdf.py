@@ -46,7 +46,6 @@ def extract_from_netcdf(
     threshold: float = 0.0,
     time_shift: float = 0.0,
     data_crs: int | None = None,
-    coord_shift: tuple[float, float] = (0.0, 0.0),
     id_field: str = "EZGNR",
     formats: tuple[str, ...] = ("csv",),
     time_chunk: int = 96,
@@ -95,13 +94,11 @@ def extract_from_netcdf(
         the source files).
     data_crs
         EPSG code of the data grid. If provided and different from the
-        shapefile CRS, the polygons are reprojected before the weight
-        computation. Mutually exclusive with coord_shift.
-    coord_shift
-        (x, y) offset added to the grid coordinates to express them in the
-        shapefile CRS. Use when the grid is defined as an exact shift of the
-        shapefile CRS (e.g. CombiPrecip LV03-style coordinates = LV95 -
-        2'000'000/1'000'000). Mutually exclusive with data_crs.
+        shapefile CRS, the polygons are brought to the grid CRS before the
+        weight computation: for CRS pairs that are exact constant offsets of
+        each other (LV03/LV95, e.g. the CombiPrecip LV03-style grid vs. an
+        LV95 shapefile) the offset is applied, otherwise the polygons are
+        reprojected.
     id_field
         Shapefile attribute used as column names / catchment coordinate.
     formats
@@ -111,9 +108,6 @@ def extract_from_netcdf(
     cache_dir
         Directory for the cached weight matrix (default: out_dir).
     """
-    if data_crs is not None and coord_shift != (0.0, 0.0):
-        raise ValueError("Provide either data_crs or coord_shift, not both.")
-
     data_dir = Path(data_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -131,10 +125,10 @@ def extract_from_netcdf(
     ids, weights = load_or_compute_weights(
         shapefile,
         id_field,
-        x_centers + coord_shift[0],
-        y_centers + coord_shift[1],
+        x_centers,
+        y_centers,
         cache_dir=cache_dir,
-        to_crs=data_crs,
+        data_crs=data_crs,
     )
 
     for year in range(year_start, year_end + 1):

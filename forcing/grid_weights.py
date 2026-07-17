@@ -17,6 +17,26 @@ from scipy import sparse
 
 logger = logging.getLogger(__name__)
 
+# CRS pairs that are exact constant offsets of each other: the Swiss LV95
+# frame (EPSG:2056) equals the LV03 frame (EPSG:21781) shifted by exactly
+# +2'000'000 / +1'000'000 m for grids defined that way (e.g. the MeteoSwiss
+# products). A true datum reprojection would add sub-metre distortions that
+# are meaningless at the km grid scale, so the constant shift is used.
+CONSTANT_CRS_SHIFTS = {(21781, 2056): (2_000_000.0, 1_000_000.0)}
+
+
+def _constant_crs_shift(
+    from_epsg: int, to_epsg: int
+) -> tuple[float, float] | None:
+    """The exact (dx, dy) between two CRS, or None if they are not an
+    exact-offset pair."""
+    if (from_epsg, to_epsg) in CONSTANT_CRS_SHIFTS:
+        return CONSTANT_CRS_SHIFTS[(from_epsg, to_epsg)]
+    if (to_epsg, from_epsg) in CONSTANT_CRS_SHIFTS:
+        dx, dy = CONSTANT_CRS_SHIFTS[(to_epsg, from_epsg)]
+        return -dx, -dy
+    return None
+
 
 def compute_weights(
     geometries,
@@ -117,7 +137,7 @@ def load_or_compute_weights(
     y_centers: np.ndarray,
     cell_size: float | None = None,
     cache_dir: str | Path | None = '.cache',
-    to_crs: int | None = None,
+    data_crs: int | None = None,
 ) -> tuple[np.ndarray, sparse.csr_matrix]:
     """
     Load the weight matrix from cache or compute (and cache) it.
@@ -132,10 +152,13 @@ def load_or_compute_weights(
         Grid definition (see compute_weights).
     cache_dir
         Directory for the cached weights. If None, no caching is done.
-    to_crs
-        EPSG code of the grid coordinates. If provided, the polygons are
-        reprojected to this CRS before the weight computation. If None, the
-        grid is assumed to be in the CRS of the shapefile.
+    data_crs
+        EPSG code of the grid coordinates. If provided and different from
+        the shapefile CRS, the polygons are brought to the grid CRS before
+        the weight computation: for CRS pairs that are exact constant
+        offsets of each other (LV03/LV95, EPSG 21781/2056) the offset is
+        applied, otherwise the polygons are reprojected. If None, the grid
+        is assumed to be in the CRS of the shapefile.
 
     Returns
     -------
@@ -147,7 +170,7 @@ def load_or_compute_weights(
     cache_path = None
     if cache_dir is not None:
         key = _cache_key(
-            shapefile, id_field, x_centers, y_centers, cell_size, to_crs)
+            shapefile, id_field, x_centers, y_centers, cell_size, data_crs)
         cache_path = Path(cache_dir) / f"weights_{shapefile.stem}_{key}.npz"
         if cache_path.exists():
             logger.info(f"Loading cached weights from {cache_path}")
@@ -164,9 +187,17 @@ def load_or_compute_weights(
         raise ValueError(f"The field '{id_field}' is not unique in {shapefile}.")
     ids = gdf[id_field].to_numpy()
 
-    if to_crs is not None and gdf.crs.to_epsg() != to_crs:
-        logger.info(f"Reprojecting catchments to EPSG:{to_crs}")
-        gdf = gdf.to_crs(epsg=to_crs)
+    shp_crs = gdf.crs.to_epsg()
+    if data_crs is not None and shp_crs != data_crs:
+        shift = _constant_crs_shift(shp_crs, data_crs)
+        if shift is not None:
+            logger.info(
+                f"Translating catchments by {shift} "
+                f"(EPSG:{shp_crs} -> EPSG:{data_crs}).")
+            gdf.geometry = gdf.geometry.translate(*shift)
+        else:
+            logger.info(f"Reprojecting catchments to EPSG:{data_crs}")
+            gdf = gdf.to_crs(epsg=data_crs)
 
     logger.info(f"Computing exact weights for {len(gdf)} catchments...")
     weights = compute_weights(gdf.geometry.values, x_centers, y_centers, cell_size)
@@ -245,13 +276,13 @@ def _cache_key(
     x_centers: np.ndarray,
     y_centers: np.ndarray,
     cell_size: float | None,
-    to_crs: int | None,
+    data_crs: int | None,
 ) -> str:
     """Hash the shapefile identity and grid definition for cache naming."""
     stat = shapefile.stat()
     parts = (
         f"{shapefile.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{id_field}|"
         f"{len(x_centers)}|{len(y_centers)}|{x_centers[0]}|{y_centers[0]}|"
-        f"{x_centers[-1]}|{y_centers[-1]}|{cell_size}|{to_crs}"
+        f"{x_centers[-1]}|{y_centers[-1]}|{cell_size}|{data_crs}"
     )
     return hashlib.sha1(parts.encode()).hexdigest()[:12]

@@ -39,20 +39,22 @@ already exist are skipped, so interrupted runs can simply be restarted.
 
 #### `netcdf` — regular-grid netCDF datasets
 
-Defaults target the hourly CombiPrecip (CPCH) product:
+Defaults target the hourly CombiPrecip (CPCH) product (its grid uses
+LV03-style coordinates, hence `--data-crs 21781`):
 
 ```bash
-python main.py netcdf --years 2005 2023 --out-dir ./output --format csv netcdf
+python main.py netcdf --data-crs 21781 --years 2005 2023 --out-dir ./output --format csv netcdf
 ```
 
 Any other regular-grid netCDF dataset can be processed by overriding the
 variable/dimension names and the file naming pattern, e.g. daily RhiresD-like
-files (one file per year):
+files (one file per year, LV95 grid like the shapefile so no `--data-crs`
+needed):
 
 ```bash
 python main.py netcdf --data-dir /path/to/data --file-pattern "{year}.nc" \
     --var-name RhiresD --dim-time time --dim-x E --dim-y N \
-    --prefix RhiresD --units mm --coord-shift 0 0 --years 1961 2023
+    --prefix RhiresD --units mm --years 1961 2023
 ```
 
 The formatted file pattern may contain glob wildcards, e.g. for the hourly
@@ -63,7 +65,7 @@ temperature (TabsH) files whose names embed the varying last day of the month
 python main.py netcdf --data-dir /path/to/TabsH_swiss.lv95 \
     --file-pattern "TabsH_ch01h.swiss.lv95_{year}{month:02d}010000_*.nc" \
     --var-name TabsH --dim-time time --dim-x E --dim-y N \
-    --prefix TabsH --output-var temp --units degC --coord-shift 0 0 \
+    --prefix TabsH --output-var temp --units degC \
     --time-shift 1 --years 2018 2023
 ```
 
@@ -71,11 +73,12 @@ python main.py netcdf --data-dir /path/to/TabsH_swiss.lv95 \
 start-labeled datasets (such as the TabsH hourly means) on the end-of-interval
 labeling convention used by the precipitation products.
 
-CRS handling: if the grid coordinates are an exact offset of the shapefile CRS
-(e.g. the hourly CombiPrecip LV03-style grid = LV95 − 2 000 000/1 000 000 m,
-the default), use `--coord-shift DX DY`. If the grid is in a genuinely
-different CRS, pass `--data-crs EPSG` instead and the catchment polygons are
-reprojected (the two options are mutually exclusive).
+CRS handling: `--data-crs EPSG` declares the CRS of the data grid; if omitted,
+the grid is assumed to be in the shapefile CRS. When it differs from the
+shapefile CRS, the catchment polygons are brought to the grid CRS: for CRS
+pairs that are exact constant offsets of each other (LV03/LV95, EPSG
+21781/2056) the exact offset is applied, any other pair is reprojected. The
+hourly CombiPrecip LV03-style grid needs `--data-crs 21781`.
 
 Output: `<prefix>_<year>.csv` / `<prefix>_<year>.nc`.
 

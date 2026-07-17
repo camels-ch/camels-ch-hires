@@ -4,20 +4,23 @@ Command-line entry point for the catchment forcing extraction.
 Examples
 --------
 Hourly CombiPrecip (netCDF grids) to hourly catchment CSVs/netCDFs
-(the defaults of the 'netcdf' command target this dataset):
-    python main.py netcdf --years 2005 2023 --out-dir ./output --format csv netcdf
+(the defaults of the 'netcdf' command target this dataset; its grid uses
+LV03-style coordinates, hence --data-crs 21781):
+    python main.py netcdf --data-crs 21781 --years 2005 2023
+        --out-dir ./output --format csv netcdf
 
-Any other regular-grid netCDF dataset, e.g. daily RhiresD-like files:
+Any other regular-grid netCDF dataset, e.g. daily RhiresD-like files
+(LV95 grid like the shapefile, so no --data-crs needed):
     python main.py netcdf --data-dir /path/to/data --file-pattern "{year}.nc"
         --var-name RhiresD --dim-time time --dim-x E --dim-y N
-        --prefix RhiresD --units mm --coord-shift 0 0 --years 1961 2023
+        --prefix RhiresD --units mm --years 1961 2023
 
 Hourly temperature (TabsH, LV95 grid), monthly files whose names embed the
 varying last day of the month (glob wildcards):
     python main.py netcdf --data-dir <...>/TabsH_swiss.lv95
         --file-pattern "TabsH_ch01h.swiss.lv95_{year}{month:02d}010000_*.nc"
         --var-name TabsH --dim-time time --dim-x E --dim-y N
-        --prefix TabsH --output-var temp --units degC --coord-shift 0 0
+        --prefix TabsH --output-var temp --units degC
         --time-shift 1 --years 2018 2023
 
 Hourly statistics (mean, max, q10, q25, q50, q75, q90) of 5-min CombiPrecip:
@@ -29,10 +32,6 @@ import logging
 
 from extract_cpc5min import extract_5min_stats
 from extract_netcdf import extract_from_netcdf
-
-# The hourly CombiPrecip files use LV03-style coordinates; the CombiPrecip
-# LV95 grid is the same grid shifted by exactly +2'000'000 / +1'000'000 m.
-    CPCH_HOURLY_COORD_SHIFT = (2_000_000.0, 1_000_000.0)
 
 
 def main():
@@ -78,13 +77,12 @@ def main():
              "start-labeled hourly means such as TabsH). Default: 0.")
     parser_nc.add_argument(
         "--data-crs", type=int, default=None,
-        help="EPSG code of the data grid, if it differs from the shapefile "
-             "CRS (polygons are reprojected). Exclusive with --coord-shift.")
-    parser_nc.add_argument(
-        "--coord-shift", nargs=2, type=float,
-        default=CPCH_HOURLY_COORD_SHIFT, metavar=("DX", "DY"),
-        help="Offset added to the grid coordinates to express them in the "
-             "shapefile CRS. Exclusive with --data-crs.")
+        help="EPSG code of the data grid; if omitted, the grid is assumed "
+             "to be in the shapefile CRS. When it differs from the "
+             "shapefile CRS, exact constant-offset pairs (LV03/LV95, EPSG "
+             "21781/2056) get the offset applied, otherwise the polygons "
+             "are reprojected. The hourly CombiPrecip LV03-style grid "
+             "needs 21781.")
 
     parser_cpc5min = subparsers.add_parser(
         "cpc5min",
@@ -129,11 +127,6 @@ def main():
     )
 
     if args.command == "netcdf":
-        coord_shift = tuple(args.coord_shift)
-        if args.data_crs is not None and coord_shift == CPCH_HOURLY_COORD_SHIFT:
-            # --data-crs given without an explicit --coord-shift: drop the
-            # CombiPrecip default shift, the reprojection takes over.
-            coord_shift = (0.0, 0.0)
         extract_from_netcdf(
             shapefile=args.shapefile,
             data_dir=args.data_dir,
@@ -151,7 +144,6 @@ def main():
             threshold=args.threshold,
             time_shift=args.time_shift,
             data_crs=args.data_crs,
-            coord_shift=coord_shift,
             id_field=args.id_field,
             formats=tuple(args.formats),
         )
