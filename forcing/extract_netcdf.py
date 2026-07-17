@@ -8,10 +8,12 @@ catchment. Variable and dimension names, the file naming pattern and the CRS
 handling are all parameters, so any regular-grid netCDF dataset can be
 processed; see main.py for the hourly CombiPrecip defaults.
 
-The timestamps are kept as in the source files. For accumulation products
-(e.g. CombiPrecip) they typically label the END of the accumulation interval:
-the row labeled T holds the precipitation summed over the interval ending
-at T (verified against the 5-min CombiPrecip product).
+The timestamps are kept as in the source files unless a time shift is given.
+For accumulation products (e.g. CombiPrecip) they typically label the END of
+the accumulation interval: the row labeled T holds the precipitation summed
+over the interval ending at T (verified against the 5-min CombiPrecip
+product). Start-labeled datasets (e.g. the TabsH hourly means) can be aligned
+on that convention with time_shift=1.
 """
 
 import logging
@@ -42,6 +44,7 @@ def extract_from_netcdf(
     output_var: str | None = None,
     units: str = "",
     threshold: float = 0.0,
+    time_shift: float = 0.0,
     data_crs: int | None = None,
     coord_shift: tuple[float, float] = (0.0, 0.0),
     id_field: str = "EZGNR",
@@ -71,7 +74,10 @@ def extract_from_netcdf(
     file_pattern
         Name of the data files, with '{year}' and '{month}' placeholders
         (e.g. '{year}{month:02d}.nc'). If '{month}' is absent, one file per
-        year is expected.
+        year is expected. The formatted name may contain glob wildcards
+        (e.g. 'TabsH_*_{year}{month:02d}010000_*.nc' for files whose names
+        embed a varying end date); all matching files are processed in
+        sorted order.
     output_prefix
         Prefix of the output file names (default: var_name).
     output_var
@@ -82,6 +88,11 @@ def extract_from_netcdf(
         Catchment values below this threshold are set to 0, to remove
         small precipitation amounts. Use 0 (default) to disable; keep it
         disabled for non-precipitation variables. NaNs are preserved.
+    time_shift
+        Hours added to the source timestamps, to align datasets on the
+        end-of-interval labeling convention (e.g. 1 for start-labeled
+        hourly means such as TabsH). Default: 0 (timestamps kept as in
+        the source files).
     data_crs
         EPSG code of the data grid. If provided and different from the
         shapefile CRS, the polygons are reprojected before the weight
@@ -153,6 +164,8 @@ def extract_from_netcdf(
             continue
 
         df = pd.concat(frames)
+        if time_shift != 0:
+            df.index = df.index + pd.Timedelta(hours=time_shift)
         if threshold > 0:
             # Remove small precipitation amounts (NaNs are preserved).
             df = df.mask(df < threshold, 0.0)
@@ -208,6 +221,10 @@ def _list_year_files(
     """
     Build the expected data file paths per year from the file pattern.
 
+    Formatted names containing glob wildcards ('*', '?' or '[') are expanded
+    against data_dir (sorted); names without wildcards are kept as paths even
+    if the file is missing, so that the caller can report it.
+
     Returns
     -------
     dict
@@ -218,12 +235,24 @@ def _list_year_files(
     year_files = {}
     for year in range(year_start, year_end + 1):
         if monthly:
-            year_files[year] = [
-                data_dir / file_pattern.format(year=year, month=month)
+            names = [
+                file_pattern.format(year=year, month=month)
                 for month in range(1, 13)
             ]
         else:
-            year_files[year] = [data_dir / file_pattern.format(year=year)]
+            names = [file_pattern.format(year=year)]
+
+        paths = []
+        for name in names:
+            if any(char in name for char in "*?["):
+                matches = sorted(data_dir.glob(name))
+                if not matches:
+                    logger.warning(
+                        f"No file matching {name} in {data_dir}.")
+                paths.extend(matches)
+            else:
+                paths.append(data_dir / name)
+        year_files[year] = paths
     return year_files
 
 

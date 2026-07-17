@@ -55,6 +55,22 @@ python main.py netcdf --data-dir /path/to/data --file-pattern "{year}.nc" \
     --prefix RhiresD --units mm --coord-shift 0 0 --years 1961 2023
 ```
 
+The formatted file pattern may contain glob wildcards, e.g. for the hourly
+temperature (TabsH) files whose names embed the varying last day of the month
+(`TabsH_ch01h.swiss.lv95_201802010000_201802282300.nc`):
+
+```bash
+python main.py netcdf --data-dir /path/to/TabsH_swiss.lv95 \
+    --file-pattern "TabsH_ch01h.swiss.lv95_{year}{month:02d}010000_*.nc" \
+    --var-name TabsH --dim-time time --dim-x E --dim-y N \
+    --prefix TabsH --output-var temp --units degC --coord-shift 0 0 \
+    --time-shift 1 --years 2018 2023
+```
+
+`--time-shift HOURS` adds an offset to the source timestamps, to align
+start-labeled datasets (such as the TabsH hourly means) on the end-of-interval
+labeling convention used by the precipitation products.
+
 CRS handling: if the grid coordinates are an exact offset of the shapefile CRS
 (e.g. the hourly CombiPrecip LV03-style grid = LV95 − 2 000 000/1 000 000 m,
 the default), use `--coord-shift DX DY`. If the grid is in a genuinely

@@ -12,6 +12,14 @@ Any other regular-grid netCDF dataset, e.g. daily RhiresD-like files:
         --var-name RhiresD --dim-time time --dim-x E --dim-y N
         --prefix RhiresD --units mm --coord-shift 0 0 --years 1961 2023
 
+Hourly temperature (TabsH, LV95 grid), monthly files whose names embed the
+varying last day of the month (glob wildcards):
+    python main.py netcdf --data-dir <...>/TabsH_swiss.lv95
+        --file-pattern "TabsH_ch01h.swiss.lv95_{year}{month:02d}010000_*.nc"
+        --var-name TabsH --dim-time time --dim-x E --dim-y N
+        --prefix TabsH --output-var temp --units degC --coord-shift 0 0
+        --time-shift 1 --years 2018 2023
+
 Hourly statistics (mean, max, q10, q25, q50, q75, q90) of 5-min CombiPrecip:
     python main.py cpc5min --years 2005 2024 --out-dir ./output
 """
@@ -24,7 +32,7 @@ from extract_netcdf import extract_from_netcdf
 
 # The hourly CombiPrecip files use LV03-style coordinates; the CombiPrecip
 # LV95 grid is the same grid shifted by exactly +2'000'000 / +1'000'000 m.
-CPCH_HOURLY_COORD_SHIFT = (2_000_000.0, 1_000_000.0)
+    CPCH_HOURLY_COORD_SHIFT = (2_000_000.0, 1_000_000.0)
 
 
 def main():
@@ -43,7 +51,7 @@ def main():
     parser_nc.add_argument(
         "--file-pattern", default="{year}{month:02d}.nc",
         help="Data file names, with {year} and optionally {month} "
-             "placeholders.")
+             "placeholders; glob wildcards (*, ?) are allowed.")
     parser_nc.add_argument(
         "--var-name", default="CPC",
         help="Name of the variable in the netCDF files.")
@@ -63,6 +71,11 @@ def main():
     parser_nc.add_argument(
         "--units", default="mm",
         help="Units of the variable (netCDF attribute).")
+    parser_nc.add_argument(
+        "--time-shift", type=float, default=0.0,
+        help="Hours added to the source timestamps, to align datasets on "
+             "the end-of-interval labeling convention (e.g. 1 for "
+             "start-labeled hourly means such as TabsH). Default: 0.")
     parser_nc.add_argument(
         "--data-crs", type=int, default=None,
         help="EPSG code of the data grid, if it differs from the shapefile "
@@ -136,6 +149,7 @@ def main():
             output_var=args.output_var,
             units=args.units,
             threshold=args.threshold,
+            time_shift=args.time_shift,
             data_crs=args.data_crs,
             coord_shift=coord_shift,
             id_field=args.id_field,
