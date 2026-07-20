@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 # are meaningless at the km grid scale, so the constant shift is used.
 CONSTANT_CRS_SHIFTS = {(21781, 2056): (2_000_000.0, 1_000_000.0)}
 
+# Magnitude above which a source cell is treated as a no-data sentinel rather
+# than a measurement. Gridded products flag no-data with a large fill value
+# (the CombiPrecip grids use the float32 maximum, 3.4028235e+38); this is
+# normally decoded to NaN on read, but a source file that omits the
+# _FillValue attribute leaves the raw sentinel in place, and area-averaging it
+# into a catchment mean produces huge garbage values (a catchment fully over
+# no-data yields the sentinel, one partly covered yields a fraction of it).
+SENTINEL_GUARD = 1e20
+
 
 def _constant_crs_shift(
     from_epsg: int, to_epsg: int
@@ -226,7 +235,9 @@ def weighted_mean(weights: sparse.csr_matrix, data: np.ndarray) -> np.ndarray:
     weights
         Sparse weight matrix of shape (n_catchments, ny * nx).
     data
-        Gridded data of shape (n_time, ny, nx); NaN marks missing cells.
+        Gridded data of shape (n_time, ny, nx). Missing cells are marked by
+        NaN or by an undecoded no-data sentinel (magnitude >= SENTINEL_GUARD);
+        both are excluded and the weights renormalized over the valid cells.
 
     Returns
     -------
@@ -236,7 +247,10 @@ def weighted_mean(weights: sparse.csr_matrix, data: np.ndarray) -> np.ndarray:
     """
     n_time = data.shape[0]
     flat = data.reshape(n_time, -1)
-    valid = np.isfinite(flat)
+    # Exclude NaN/inf and undecoded no-data sentinels (see SENTINEL_GUARD), so
+    # a source file missing its _FillValue attribute cannot leak the raw fill
+    # value into the area-weighted mean.
+    valid = np.isfinite(flat) & (np.abs(flat) < SENTINEL_GUARD)
 
     num = weights @ np.where(valid, flat, 0.0).T  # (n_catchments, n_time)
     den = weights @ valid.T.astype(np.float64)
