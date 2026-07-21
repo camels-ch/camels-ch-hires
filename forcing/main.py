@@ -62,8 +62,8 @@ def main():
     parser_nc.add_argument(
         "--dim-y", default="Y", help="Name of the y dimension.")
     parser_nc.add_argument(
-        "--prefix", default="CPC_hourly",
-        help="Prefix of the output file names.")
+        "--prefix", default=None,
+        help="Prefix of the output file names (default: the variable name).")
     parser_nc.add_argument(
         "--output-var", default="precip",
         help="Name of the variable in the output netCDF files.")

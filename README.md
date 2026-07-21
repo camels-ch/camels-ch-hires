@@ -39,48 +39,80 @@ already exist are skipped, so interrupted runs can simply be restarted.
 
 #### `netcdf` — regular-grid netCDF datasets
 
-Defaults target the hourly CombiPrecip (CPCH) product (its grid uses
-LV03-style coordinates, hence `--data-crs 21781`):
+Handles any regular-grid netCDF dataset: the variable name, dimension names,
+file-naming pattern, CRS and unit handling are all options, so the same tool
+covers CombiPrecip, ERA5-Land, RhiresD, TabsH, etc. The formatted file pattern
+may contain glob wildcards (`*`, `?`), so a single-file-per-year product whose
+name embeds a varying end date is matched with `..._{year}*.nc`. Output files
+are `<prefix>_<year>.csv` / `.nc`, where `--prefix` defaults to the variable
+name.
+
+**Hourly CombiPrecip (CPCH, LV95 grid)** — precipitation, mm, end-labeled hours:
 
 ```bash
-python main.py netcdf --data-crs 21781 --years 2005 2023 --out-dir ./output --format csv netcdf
+python main.py netcdf --years 2005 2023 --out-dir ./output --format netcdf \
+    --data-dir /path/to/CPCH_hourly_lv95 \
+    --file-pattern "CPC_00060_H_{year}*.nc" \
+    --var-name CPC --dim-time REFERENCE_TS --dim-x x --dim-y y \
+    --prefix CPC_hourly --units mm
 ```
 
-Any other regular-grid netCDF dataset can be processed by overriding the
-variable/dimension names and the file naming pattern, e.g. daily RhiresD-like
-files (one file per year, LV95 grid like the shapefile so no `--data-crs`
-needed):
+The older LV03-style `CPCH_hourly` share instead uses uppercase `X`/`Y` and
+needs `--data-crs 21781` (its grid is LV03, offset from the LV95 shapefile).
+
+**ERA5-Land precipitation** — the `deaccumulated` share holds per-hour values
+already in mm and is used directly:
 
 ```bash
-python main.py netcdf --data-dir /path/to/data --file-pattern "{year}.nc" \
+python main.py netcdf --years 1950 2022 --out-dir ./output --format netcdf \
+    --data-dir /path/to/ERA5-Land/deaccumulated/PRC \
+    --file-pattern "PRC-{year}{month:02d}.nc" \
+    --var-name tp --dim-time time --dim-x longitude --dim-y latitude \
+    --data-crs 4326 --prefix ERA5_PRC --units mm
+```
+
+The raw ERA5-Land `PRC` share stores `tp` as a daily-resetting accumulation in
+metres; add `--deaccumulate --scale 1000` to obtain per-hour mm. The grid is
+geographic (`--data-crs 4326`), so the polygons are reprojected and the area
+weighting is computed in degrees (a small latitudinal bias).
+
+**Daily RhiresD** — daily precipitation sums, LV95 grid (no `--data-crs`), one
+file per year:
+
+```bash
+python main.py netcdf --years 1961 2024 --out-dir ./output --format netcdf \
+    --data-dir /path/to/RhiresD_v2.0_swiss.lv95 \
+    --file-pattern "RhiresD_ch01h.swiss.lv95_{year}*.nc" \
     --var-name RhiresD --dim-time time --dim-x E --dim-y N \
-    --prefix RhiresD --units mm --years 1961 2023
+    --prefix RhiresD --units mm
 ```
 
-The formatted file pattern may contain glob wildcards, e.g. for the hourly
-temperature (TabsH) files whose names embed the varying last day of the month
-(`TabsH_ch01h.swiss.lv95_201802010000_201802282300.nc`):
+**Hourly TabsH temperature** — start-labeled hourly means, LV95 grid, monthly
+files whose names embed the varying last day (hence the glob pattern):
 
 ```bash
-python main.py netcdf --data-dir /path/to/TabsH_swiss.lv95 \
+python main.py netcdf --years 2018 2023 --out-dir ./output --format netcdf \
+    --data-dir /path/to/TabsH_swiss.lv95 \
     --file-pattern "TabsH_ch01h.swiss.lv95_{year}{month:02d}010000_*.nc" \
     --var-name TabsH --dim-time time --dim-x E --dim-y N \
-    --prefix TabsH --output-var temp --units degC \
-    --time-shift 1 --years 2018 2023
+    --prefix TabsH --output-var temp --units degC --time-shift 1
 ```
 
-`--time-shift HOURS` adds an offset to the source timestamps, to align
-start-labeled datasets (such as the TabsH hourly means) on the end-of-interval
-labeling convention used by the precipitation products.
+Processing options:
 
-CRS handling: `--data-crs EPSG` declares the CRS of the data grid; if omitted,
-the grid is assumed to be in the shapefile CRS. When it differs from the
-shapefile CRS, the catchment polygons are brought to the grid CRS: for CRS
-pairs that are exact constant offsets of each other (LV03/LV95, EPSG
-21781/2056) the exact offset is applied, any other pair is reprojected. The
-hourly CombiPrecip LV03-style grid needs `--data-crs 21781`.
+- `--deaccumulate` — treat the variable as a daily-resetting accumulation
+  (e.g. ERA5-Land `tp`, accumulated from 00 UTC) and difference it to per-step
+  amounts (rounding-noise negatives are clipped).
+- `--scale FACTOR` — multiply the extracted values, e.g. `1000` for m → mm.
+- `--time-shift HOURS` — offset the source timestamps to align start-labeled
+  datasets (e.g. TabsH, `1`) on the end-of-interval convention used by the
+  precipitation products.
+- `--data-crs EPSG` — CRS of the data grid; if omitted it is assumed to match
+  the shapefile. Constant-offset pairs (LV03/LV95, EPSG 21781/2056) get the
+  exact offset applied, any other pair is reprojected.
 
-Output: `<prefix>_<year>.csv` / `<prefix>_<year>.nc`.
+Output: `<prefix>_<year>.csv` / `<prefix>_<year>.nc` (prefix defaults to the
+variable name).
 
 #### `cpc5min` — hourly statistics of the 5-min CombiPrecip
 
