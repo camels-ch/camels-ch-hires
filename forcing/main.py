@@ -76,6 +76,16 @@ def main():
              "the end-of-interval labeling convention (e.g. 1 for "
              "start-labeled hourly means such as TabsH). Default: 0.")
     parser_nc.add_argument(
+        "--deaccumulate", action="store_true",
+        help="Treat the variable as a daily-resetting accumulation "
+             "(e.g. ERA5-Land total precipitation, accumulated from 00 UTC) "
+             "and difference it to per-step amounts. Default: off.")
+    parser_nc.add_argument(
+        "--scale", type=float, default=1.0,
+        help="Multiplicative factor applied to the extracted values "
+             "(e.g. 1000 to convert ERA5-Land precipitation from m to mm). "
+             "Default: 1.0 (no scaling).")
+    parser_nc.add_argument(
         "--data-crs", type=int, default=None,
         help="EPSG code of the data grid; if omitted, the grid is assumed "
              "to be in the shapefile CRS. When it differs from the "
@@ -143,6 +153,8 @@ def main():
             units=args.units,
             threshold=args.threshold,
             time_shift=args.time_shift,
+            deaccumulate=args.deaccumulate,
+            scale=args.scale,
             data_crs=args.data_crs,
             id_field=args.id_field,
             formats=tuple(args.formats),

@@ -29,6 +29,34 @@ from output import write_csv, write_netcdf
 logger = logging.getLogger(__name__)
 
 
+def _deaccumulate(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Recover per-step amounts from a daily-accumulated field (e.g. ERA5-Land
+    total precipitation, which accumulates from 00 UTC and resets each day).
+
+    The value at each hourly step is the accumulation since the last 00:00, so
+    the per-hour amount is the difference to the previous step, taking the
+    value itself at each accumulation-window start (baseline zero). A window
+    starts at the step ending at 01:00 UTC, and also wherever the previous step
+    is not exactly one hour earlier (series start or a gap between files), so
+    no spurious value is carried across a discontinuity.
+
+    De-accumulation and the area-weighted mean are both linear, so applying it
+    to the catchment-average series is equivalent to differencing every grid
+    cell first, provided the valid-cell mask is constant in time (it is for the
+    static ERA5-Land land/sea mask).
+    """
+    df = df.sort_index()
+    out = df - df.shift(1)
+    dt = df.index.to_series().diff()
+    window_start = (df.index.hour == 1) | (dt != pd.Timedelta(hours=1))
+    out.loc[window_start] = df.loc[window_start]
+    # An accumulation is non-decreasing within its window, so the only way to
+    # get a negative here is float rounding in the source (a known ERA5
+    # artifact of the order of 1e-5 mm); clip it away (NaNs are preserved).
+    return out.clip(lower=0.0)
+
+
 def extract_from_netcdf(
     shapefile: str | Path,
     data_dir: str | Path,
@@ -45,6 +73,8 @@ def extract_from_netcdf(
     units: str = "",
     threshold: float = 0.0,
     time_shift: float = 0.0,
+    deaccumulate: bool = False,
+    scale: float = 1.0,
     data_crs: int | None = None,
     id_field: str = "EZGNR",
     formats: tuple[str, ...] = ("csv",),
@@ -92,6 +122,15 @@ def extract_from_netcdf(
         end-of-interval labeling convention (e.g. 1 for start-labeled
         hourly means such as TabsH). Default: 0 (timestamps kept as in
         the source files).
+    deaccumulate
+        Treat the variable as a daily-resetting accumulation (as ERA5-Land
+        total precipitation, accumulated from 00 UTC) and difference it to
+        per-step amounts. Applied to the catchment-average series before the
+        time shift and threshold. Default: False (values used as-is).
+    scale
+        Multiplicative factor applied to the extracted values, e.g. 1000 to
+        convert ERA5-Land precipitation from m to mm. Default: 1.0 (no
+        scaling). NaNs are preserved.
     data_crs
         EPSG code of the data grid. If provided and different from the
         shapefile CRS, the polygons are brought to the grid CRS before the
@@ -158,6 +197,10 @@ def extract_from_netcdf(
             continue
 
         df = pd.concat(frames)
+        if deaccumulate:
+            df = _deaccumulate(df)
+        if scale != 1.0:
+            df = df * scale
         if time_shift != 0:
             df.index = df.index + pd.Timedelta(hours=time_shift)
         if threshold > 0:

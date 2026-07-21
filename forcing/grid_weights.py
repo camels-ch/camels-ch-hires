@@ -262,9 +262,13 @@ def weighted_mean(weights: sparse.csr_matrix, data: np.ndarray) -> np.ndarray:
 def _get_regular_step(coords: np.ndarray, name: str) -> float:
     """Return the (signed) step of a regular coordinate axis, validating it."""
     steps = np.diff(coords)
-    if not np.allclose(steps, steps[0]):
+    step = np.median(steps)
+    # Coordinates stored as float32 (e.g. ERA5's 0.1 deg grid) make the step
+    # wobble by a few 1e-6; allow deviations up to 0.1 % of the step so such
+    # grids are accepted while genuinely irregular axes are still rejected.
+    if not np.allclose(steps, step, rtol=1e-3, atol=0.0):
         raise ValueError(f"The {name} coordinates are not regularly spaced.")
-    return float(steps[0])
+    return float(step)
 
 
 def _index_range(
