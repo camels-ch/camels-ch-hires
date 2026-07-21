@@ -93,6 +93,20 @@ def main():
              "21781/2056) get the offset applied, otherwise the polygons "
              "are reprojected. The hourly CombiPrecip LV03-style grid "
              "needs 21781.")
+    parser_nc.add_argument(
+        "--lon2d", default=None,
+        help="Name of the 2D longitude variable, for grids georeferenced "
+             "only by 2D lon/lat arrays (e.g. WRF/CHAPTER). Requires "
+             "--lat2d and --grid-proj.")
+    parser_nc.add_argument(
+        "--lat2d", default=None,
+        help="Name of the 2D latitude variable (see --lon2d).")
+    parser_nc.add_argument(
+        "--grid-proj", default=None,
+        help="PROJ string of the projection the grid is regular in, used "
+             "with --lon2d/--lat2d to recover the 1D axes (e.g. for CHAPTER "
+             "'+proj=merc +lat_ts=44.671 +lon_0=10.914 +R=6370000 +units=m'). "
+             "Takes precedence over --data-crs.")
 
     parser_cpc5min = subparsers.add_parser(
         "cpc5min",
@@ -156,6 +170,9 @@ def main():
             deaccumulate=args.deaccumulate,
             scale=args.scale,
             data_crs=args.data_crs,
+            lon2d=args.lon2d,
+            lat2d=args.lat2d,
+            grid_proj=args.grid_proj,
             id_field=args.id_field,
             formats=tuple(args.formats),
         )

@@ -23,7 +23,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from grid_weights import load_or_compute_weights, weighted_mean
+from grid_weights import (
+    axes_from_2d_lonlat,
+    load_or_compute_weights,
+    weighted_mean,
+)
 from output import write_csv, write_netcdf
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,9 @@ def extract_from_netcdf(
     deaccumulate: bool = False,
     scale: float = 1.0,
     data_crs: int | None = None,
+    lon2d: str | None = None,
+    lat2d: str | None = None,
+    grid_proj: str | None = None,
     id_field: str = "EZGNR",
     formats: tuple[str, ...] = ("csv",),
     time_chunk: int = 96,
@@ -138,6 +145,13 @@ def extract_from_netcdf(
         each other (LV03/LV95, e.g. the CombiPrecip LV03-style grid vs. an
         LV95 shapefile) the offset is applied, otherwise the polygons are
         reprojected.
+    lon2d, lat2d, grid_proj
+        For grids georeferenced only by 2D longitude/latitude arrays (no 1D
+        coordinate axes, e.g. the WRF-based CHAPTER output): the names of the
+        2D coordinate variables and a PROJ string for the projection the grid
+        is regular in. When given, the 1D axes are recovered by projecting
+        lon2d/lat2d into grid_proj (which also becomes the CRS the catchment
+        polygons are reprojected to), and dim_x/dim_y/data_crs are ignored.
     id_field
         Shapefile attribute used as column names / catchment coordinate.
     formats
@@ -156,11 +170,17 @@ def extract_from_netcdf(
         output_prefix = var_name
     if output_var is None:
         output_var = var_name
+    if bool(grid_proj) != bool(lon2d and lat2d):
+        raise ValueError(
+            "lon2d, lat2d and grid_proj must be given together to use "
+            "2D-coordinate (WRF-style) grids."
+        )
 
     year_files = _list_year_files(
         data_dir, file_pattern, year_start, year_end)
 
-    x_centers, y_centers = _get_grid_coords(year_files, dim_x, dim_y)
+    x_centers, y_centers = _get_grid_coords(
+        year_files, dim_x, dim_y, lon2d, lat2d, grid_proj)
     ids, weights = load_or_compute_weights(
         shapefile,
         id_field,
@@ -168,6 +188,7 @@ def extract_from_netcdf(
         y_centers,
         cache_dir=cache_dir,
         data_crs=data_crs,
+        grid_proj=grid_proj,
     )
 
     for year in range(year_start, year_end + 1):
@@ -189,7 +210,8 @@ def extract_from_netcdf(
             logger.info(f"Processing {nc_path.name}...")
             frames.append(
                 _extract_file(nc_path, weights, ids, x_centers, y_centers,
-                              var_name, dim_time, dim_x, dim_y, time_chunk)
+                              var_name, dim_time, dim_x, dim_y, time_chunk,
+                              lon2d, lat2d, grid_proj)
             )
 
         if not frames:
@@ -219,6 +241,28 @@ def extract_from_netcdf(
             )
 
 
+def _read_axes(
+    ds: xr.Dataset,
+    dim_x: str,
+    dim_y: str,
+    lon2d: str | None,
+    lat2d: str | None,
+    grid_proj: str | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return the 1D grid axes (x_centers, y_centers) of an open dataset.
+
+    Regular datasets carry them as 1D coordinate variables (`dim_x`/`dim_y`).
+    Grids georeferenced only by 2D lon/lat arrays (`lon2d`/`lat2d`, e.g. WRF
+    output) supply `grid_proj`, and the axes are recovered by projecting those
+    coordinates into that CRS.
+    """
+    if grid_proj is not None:
+        return axes_from_2d_lonlat(
+            ds[lon2d].values, ds[lat2d].values, grid_proj)
+    return ds[dim_x].values, ds[dim_y].values
+
+
 def _extract_file(
     nc_path: Path,
     weights,
@@ -230,12 +274,15 @@ def _extract_file(
     dim_x: str,
     dim_y: str,
     time_chunk: int,
+    lon2d: str | None = None,
+    lat2d: str | None = None,
+    grid_proj: str | None = None,
 ) -> pd.DataFrame:
     """Extract the catchment means for one netCDF file."""
     with xr.open_dataset(nc_path) as ds:
+        x_axis, y_axis = _read_axes(ds, dim_x, dim_y, lon2d, lat2d, grid_proj)
         if not (
-            np.allclose(ds[dim_x].values, x_centers)
-            and np.allclose(ds[dim_y].values, y_centers)
+            np.allclose(x_axis, x_centers) and np.allclose(y_axis, y_centers)
         ):
             raise RuntimeError(
                 f"The grid of {nc_path} does not match the reference grid."
@@ -294,12 +341,19 @@ def _list_year_files(
 
 
 def _get_grid_coords(
-    year_files: dict[int, list[Path]], dim_x: str, dim_y: str
+    year_files: dict[int, list[Path]],
+    dim_x: str,
+    dim_y: str,
+    lon2d: str | None = None,
+    lat2d: str | None = None,
+    grid_proj: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read the grid coordinates from the first available data file."""
     for paths in year_files.values():
         for nc_path in paths:
             if nc_path.exists():
                 with xr.open_dataset(nc_path) as ds:
-                    return ds[dim_x].values.copy(), ds[dim_y].values.copy()
+                    x_axis, y_axis = _read_axes(
+                        ds, dim_x, dim_y, lon2d, lat2d, grid_proj)
+                    return np.asarray(x_axis).copy(), np.asarray(y_axis).copy()
     raise FileNotFoundError("No data file found for the requested years.")

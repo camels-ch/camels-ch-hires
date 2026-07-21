@@ -98,6 +98,20 @@ python main.py netcdf --years 2018 2023 --out-dir ./output --format netcdf \
     --prefix TabsH --output-var temp --units degC --time-shift 1
 ```
 
+**Hourly CHAPTER precipitation** — WRF model output (3 km, Mercator grid) with
+no 1D coordinate axes, only 2D `XLONG`/`XLAT`; the 1D axes are recovered by
+projecting them into the model's Mercator CRS (`--lon2d/--lat2d/--grid-proj`):
+
+```bash
+python main.py netcdf --years 1981 2022 --out-dir ./output --format netcdf \
+    --data-dir /path/to/CHAPTER/PREC_ACC_NC \
+    --file-pattern "PREC_ACC_NC_{year}_CH.nc" \
+    --var-name PREC_ACC_NC --dim-time XTIME \
+    --lon2d XLONG --lat2d XLAT \
+    --grid-proj "+proj=merc +lat_ts=44.671 +lon_0=10.914 +R=6370000 +units=m" \
+    --prefix CHAPTER_PREC --units mm
+```
+
 Processing options:
 
 - `--deaccumulate` — treat the variable as a daily-resetting accumulation
@@ -110,6 +124,12 @@ Processing options:
 - `--data-crs EPSG` — CRS of the data grid; if omitted it is assumed to match
   the shapefile. Constant-offset pairs (LV03/LV95, EPSG 21781/2056) get the
   exact offset applied, any other pair is reprojected.
+- `--lon2d NAME --lat2d NAME --grid-proj PROJ` — for grids georeferenced only
+  by 2D lon/lat arrays (e.g. WRF/CHAPTER): recover the regular 1D axes by
+  projecting the 2D coordinates into `--grid-proj` (a PROJ string), which also
+  becomes the CRS the catchments are reprojected to. Used together; they take
+  precedence over `--data-crs`. The grid must be axis-aligned in that
+  projection (extraction aborts if it is genuinely curvilinear).
 
 Output: `<prefix>_<year>.csv` / `<prefix>_<year>.nc` (prefix defaults to the
 variable name).

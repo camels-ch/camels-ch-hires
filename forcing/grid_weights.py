@@ -147,6 +147,7 @@ def load_or_compute_weights(
     cell_size: float | None = None,
     cache_dir: str | Path | None = '.cache',
     data_crs: int | None = None,
+    grid_proj: str | None = None,
 ) -> tuple[np.ndarray, sparse.csr_matrix]:
     """
     Load the weight matrix from cache or compute (and cache) it.
@@ -168,6 +169,11 @@ def load_or_compute_weights(
         offsets of each other (LV03/LV95, EPSG 21781/2056) the offset is
         applied, otherwise the polygons are reprojected. If None, the grid
         is assumed to be in the CRS of the shapefile.
+    grid_proj
+        CRS the grid coordinates are given in, as a PROJ string (used when the
+        axes were recovered from 2D lon/lat via `axes_from_2d_lonlat`, e.g. a
+        WRF Mercator projection). Takes precedence over `data_crs`: the
+        polygons are always reprojected to it. If None, `data_crs` is used.
 
     Returns
     -------
@@ -179,7 +185,8 @@ def load_or_compute_weights(
     cache_path = None
     if cache_dir is not None:
         key = _cache_key(
-            shapefile, id_field, x_centers, y_centers, cell_size, data_crs)
+            shapefile, id_field, x_centers, y_centers, cell_size,
+            grid_proj if grid_proj is not None else data_crs)
         cache_path = Path(cache_dir) / f"weights_{shapefile.stem}_{key}.npz"
         if cache_path.exists():
             logger.info(f"Loading cached weights from {cache_path}")
@@ -197,7 +204,10 @@ def load_or_compute_weights(
     ids = gdf[id_field].to_numpy()
 
     shp_crs = gdf.crs.to_epsg()
-    if data_crs is not None and shp_crs != data_crs:
+    if grid_proj is not None:
+        logger.info("Reprojecting catchments to the grid projection.")
+        gdf = gdf.to_crs(grid_proj)
+    elif data_crs is not None and shp_crs != data_crs:
         shift = _constant_crs_shift(shp_crs, data_crs)
         if shift is not None:
             logger.info(
@@ -263,12 +273,86 @@ def _get_regular_step(coords: np.ndarray, name: str) -> float:
     """Return the (signed) step of a regular coordinate axis, validating it."""
     steps = np.diff(coords)
     step = np.median(steps)
-    # Coordinates stored as float32 (e.g. ERA5's 0.1 deg grid) make the step
-    # wobble by a few 1e-6; allow deviations up to 0.1 % of the step so such
-    # grids are accepted while genuinely irregular axes are still rejected.
-    if not np.allclose(steps, step, rtol=1e-3, atol=0.0):
+    # Real regular grids wobble a little: float32-stored coordinates (ERA5's
+    # 0.1 deg grid) by a few 1e-6, and axes recovered by reprojecting a WRF
+    # grid's 2D lon/lat (CHAPTER) by ~0.1 %. Allow deviations up to 0.5 % of
+    # the step so such grids pass, while genuinely irregular axes (e.g. a
+    # Mercator grid's latitude read as degrees, ~5 %) are still rejected.
+    if not np.allclose(steps, step, rtol=5e-3, atol=0.0):
         raise ValueError(f"The {name} coordinates are not regularly spaced.")
     return float(step)
+
+
+def axes_from_2d_lonlat(
+    lon2d: np.ndarray,
+    lat2d: np.ndarray,
+    grid_proj: str,
+    source_crs: str = "EPSG:4326",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Recover regular 1D projected axes from 2D longitude/latitude coordinates.
+
+    Some products (e.g. the WRF-based CHAPTER output) store no 1D coordinate
+    axes, only 2D `XLONG`/`XLAT` arrays, yet their grid is regular in the
+    model's own projection. Projecting the 2D lon/lat into `grid_proj` yields a
+    grid aligned with the projection axes, whose 1D x and y axes can then be
+    used by the regular-grid weighting.
+
+    Parameters
+    ----------
+    lon2d, lat2d
+        2D coordinate arrays of shape (ny, nx) in `source_crs` (default WGS84).
+    grid_proj
+        CRS the grid is regular in, as a PROJ string or any pyproj-readable
+        CRS (e.g. a WRF Mercator "+proj=merc +lat_ts=... +lon_0=... +R=...").
+    source_crs
+        CRS of `lon2d`/`lat2d`. Default "EPSG:4326".
+
+    Returns
+    -------
+    (x_centers, y_centers)
+        The 1D projected cell-center coordinates (x along the last axis, y
+        along the first), in the units of `grid_proj`.
+
+    Raises
+    ------
+    ValueError
+        If the grid is not aligned with `grid_proj` (i.e. genuinely
+        curvilinear): the projected x still varies down a column, or y along a
+        row, by more than 0.5 % of the cell size. Such grids need per-cell
+        (quadrilateral) weighting, which is not supported here.
+    """
+    from pyproj import Transformer
+
+    lon2d = np.asarray(lon2d, dtype=float)
+    lat2d = np.asarray(lat2d, dtype=float)
+    if lon2d.ndim != 2 or lon2d.shape != lat2d.shape:
+        raise ValueError(
+            "lon2d and lat2d must be 2D arrays of equal shape "
+            f"(got {lon2d.shape} and {lat2d.shape})."
+        )
+
+    transformer = Transformer.from_crs(source_crs, grid_proj, always_xy=True)
+    x2d, y2d = transformer.transform(lon2d, lat2d)
+
+    # For a grid aligned with the projection, x is constant down each column
+    # and y constant along each row; the 1D axes are then the per-column and
+    # per-row averages.
+    x_centers = x2d.mean(axis=0)
+    y_centers = y2d.mean(axis=1)
+
+    cell = min(abs(np.median(np.diff(x_centers))),
+               abs(np.median(np.diff(y_centers))))
+    x_dev = np.max(np.abs(x2d - x_centers[None, :]))
+    y_dev = np.max(np.abs(y2d - y_centers[:, None]))
+    if max(x_dev, y_dev) > 5e-3 * cell:
+        raise ValueError(
+            "The 2D coordinates are not aligned with the given grid_proj "
+            f"(x/y deviation {max(x_dev, y_dev):.1f} > {5e-3 * cell:.1f} m): "
+            "the grid is curvilinear in this projection, which is not "
+            "supported. Check the projection parameters."
+        )
+    return x_centers, y_centers
 
 
 def _index_range(
@@ -294,7 +378,7 @@ def _cache_key(
     x_centers: np.ndarray,
     y_centers: np.ndarray,
     cell_size: float | None,
-    data_crs: int | None,
+    data_crs: int | str | None,
 ) -> str:
     """Hash the shapefile identity and grid definition for cache naming."""
     stat = shapefile.stat()
