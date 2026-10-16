@@ -25,6 +25,9 @@ varying last day of the month (glob wildcards):
 
 Hourly statistics (mean, max, q10, q25, q50, q75, q90) of 5-min CombiPrecip:
     python main.py cpc5min --years 2005 2024 --out-dir ./output
+
+Native 5-min time series of CombiPrecip (mm/h):
+    python main.py cpc5min --native --years 2005 2024 --out-dir ./output
 """
 
 import argparse
@@ -110,13 +113,23 @@ def main():
 
     parser_cpc5min = subparsers.add_parser(
         "cpc5min",
-        help="Extract hourly statistics from the 5-min CPCH zip files.")
+        help="Extract hourly statistics (or the native 5-min series) from "
+             "the 5-min CPCH zip files.")
     parser_cpc5min.add_argument(
         "--data-dir",
         help="Root of the <YYYY>/<YYDOY>/CPCH*.zip tree.")
     parser_cpc5min.add_argument(
         "--workers", type=int, default=4,
         help="Number of parallel workers for the daily zip files.")
+    parser_cpc5min.add_argument(
+        "--native", action="store_true",
+        help="Write the native 5-min time series (mm/h) instead of hourly "
+             "statistics.")
+    parser_cpc5min.add_argument(
+        "--threshold-mode", choices=["hourly", "step"], default="hourly",
+        help="With --native and --threshold: 'hourly' (default) sets to 0 "
+             "all 5-min steps of an hour whose mean is below the threshold; "
+             "'step' sets to 0 each 5-min step below the threshold.")
 
     for sub in (parser_nc, parser_cpc5min):
         sub.add_argument(
@@ -187,6 +200,8 @@ def main():
             formats=tuple(args.formats),
             threshold=args.threshold,
             n_workers=args.workers,
+            native=args.native,
+            threshold_mode=args.threshold_mode,
         )
 
 

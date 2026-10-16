@@ -154,6 +154,20 @@ versions.
 Output: `CPC_5min_<stat>_<year>.csv` (one file per statistic) and/or
 `CPC_5min_stats_<year>.nc` (one variable per statistic).
 
+With `--native`, the 5-min catchment means themselves are written instead
+(intensities in mm/h, the row labeled `T` holding the 5-min interval ending at
+`T`; a year spans `Jan 1 00:00` to `Dec 31 23:55`):
+
+```bash
+python main.py cpc5min --native --years 2005 2024 --out-dir ./output --format netcdf
+```
+
+Output: `CPC_5min_<year>.csv` and/or `CPC_5min_<year>.nc` (variable
+`precip`). With `--threshold`, `--threshold-mode` selects how it applies:
+`hourly` (default) sets to 0 all 5-min steps of an hour whose mean is below
+the threshold (consistent with the hourly statistics), `step` sets to 0 each
+5-min step below it. Without `--threshold` (or with 0), all values are kept.
+
 #### Common options
 
 | Option              | Default           | Description                                               |

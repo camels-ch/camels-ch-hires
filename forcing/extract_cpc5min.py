@@ -1,13 +1,15 @@
 """
-Extraction of hourly statistics of the 5-minute CombiPrecip (CPCH_5min) data
-for catchments.
+Extraction of the 5-minute CombiPrecip (CPCH_5min) data for catchments, either
+as hourly statistics or as the native 5-min time series.
 
 The zipped ODIM-HDF5 files (one zip per day, organised as <YYYY>/<YYDOY>/
 CPCH*.zip) hold 5-min precipitation rates in mm/h. For each 5-min step the
 exact area-weighted catchment mean is computed first; the 12 values of each
 hour are then reduced to statistics (mean, max, q10, q25, q50, q75, q90),
 written per year as one CSV per statistic (one column per catchment) and/or
-one netCDF file with one variable per statistic.
+one netCDF file with one variable per statistic. In native mode, the 5-min
+catchment means themselves are written per year (one CSV and/or one netCDF
+file).
 
 Conventions
 -----------
@@ -15,7 +17,8 @@ Conventions
   numerically equal to the hourly precipitation sum in mm.
 - Timestamps label the END of the interval, matching the hourly CPCH netCDF
   product: the row labeled T holds the statistics of the 12 five-minute
-  intervals ending at T-55', ..., T-5', T.
+  intervals ending at T-55', ..., T-5', T. In native mode, the row labeled T
+  holds the intensity of the 5-min interval ending at T.
 - The 5-min timestamps are parsed from the file names (CPC<YYDOY><HHMM>...),
   because the 'what' date/time HDF5 attributes are rounded to the hour in
   some product versions.
@@ -55,6 +58,8 @@ STEPS_PER_HOUR = 12
 
 QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
 STATS = ("mean", "max") + tuple(f"q{int(q * 100)}" for q in QUANTILES)
+NATIVE_VAR = "precip"
+THRESHOLD_MODES = ("hourly", "step")
 
 
 def extract_5min_stats(
@@ -68,10 +73,13 @@ def extract_5min_stats(
     threshold: float = 0.0,
     n_workers: int = 4,
     cache_dir: str | Path | None = None,
+    native: bool = False,
+    threshold_mode: str = "hourly",
 ) -> None:
     """
     Extract hourly statistics of 5-min catchment precipitation, written per
-    year as CSV files (one per statistic) and/or a netCDF file.
+    year as CSV files (one per statistic) and/or a netCDF file, or (native
+    mode) the 5-min catchment precipitation itself.
 
     Parameters
     ----------
@@ -80,8 +88,9 @@ def extract_5min_stats(
     data_dir
         Root of the <YYYY>/<YYDOY>/CPCH*.zip tree.
     out_dir
-        Output directory for the yearly files (CPCH_5min_<stat>_<year>.csv,
-        CPCH_5min_stats_<year>.nc).
+        Output directory for the yearly files (CPC_5min_<stat>_<year>.csv,
+        CPC_5min_stats_<year>.nc; native mode: CPC_5min_<year>.csv,
+        CPC_5min_<year>.nc).
     year_start, year_end
         Year range to process (inclusive). Years whose outputs all exist are
         skipped.
@@ -92,13 +101,24 @@ def extract_5min_stats(
     threshold
         Hours whose mean intensity is below this threshold are considered
         dry: all their statistics are set to 0, to remove small
-        precipitation amounts. Use 0 (default) to disable. NaNs are
-        preserved.
+        precipitation amounts. Use 0 (default) to disable, i.e. to keep all
+        values. NaNs are preserved.
     n_workers
         Number of parallel workers reading the daily zip files.
     cache_dir
         Directory for the cached weight matrix (default: out_dir).
+    native
+        Write the native 5-min time series (mm/h) instead of hourly
+        statistics.
+    threshold_mode
+        How the threshold is applied in native mode: 'hourly' (default) zeroes
+        all 5-min steps of an hour whose mean is below the threshold
+        (consistent with the hourly statistics); 'step' zeroes each 5-min
+        step below the threshold. Ignored for the hourly statistics.
     """
+    if threshold_mode not in THRESHOLD_MODES:
+        raise ValueError(f"Unknown threshold mode: {threshold_mode}")
+
     data_dir = Path(data_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -111,18 +131,23 @@ def extract_5min_stats(
         shapefile, id_field, x_centers, y_centers, CELL_SIZE,
         cache_dir=cache_dir,
     )
-    n_catch = len(ids)
 
     for year in range(year_start, year_end + 1):
         csv_paths = {}
         nc_path = None
-        if "csv" in formats:
-            csv_paths = {
-                stat: out_dir / f"CPC_5min_{stat}_{year}.csv"
-                for stat in STATS
-            }
-        if "netcdf" in formats:
-            nc_path = out_dir / f"CPC_5min_stats_{year}.nc"
+        if native:
+            if "csv" in formats:
+                csv_paths = {NATIVE_VAR: out_dir / f"CPC_5min_{year}.csv"}
+            if "netcdf" in formats:
+                nc_path = out_dir / f"CPC_5min_{year}.nc"
+        else:
+            if "csv" in formats:
+                csv_paths = {
+                    stat: out_dir / f"CPC_5min_{stat}_{year}.csv"
+                    for stat in STATS
+                }
+            if "netcdf" in formats:
+                nc_path = out_dir / f"CPC_5min_stats_{year}.nc"
         expected = list(csv_paths.values()) + ([nc_path] if nc_path else [])
         if all(path.exists() for path in expected):
             logger.info(f"Skipping {year} (outputs already exist).")
@@ -134,8 +159,9 @@ def extract_5min_stats(
             continue
 
         # The hour labeled 'Jan 1 00:00' needs the last day of the previous
-        # year; the hour labeled 'Dec 31 23:00' needs the first 5-min step of
-        # the next year (via the day lookahead below).
+        # year; the hour labeled 'Dec 31 23:00' (native mode: 'Jan 1 00:00' of
+        # the next year, for the hourly threshold) needs the first 5-min step
+        # of the next year.
         day_list = (
             _list_daily_zips(data_dir, year - 1)[-1:]
             + day_list
@@ -143,43 +169,17 @@ def extract_5min_stats(
         )
 
         logger.info(f"Processing {len(day_list)} days for {year}...")
-        hours_all = []
-        stats_all = []
-        nan_row = np.full((1, n_catch), np.nan)
-        prev: tuple[pd.Timestamp, np.ndarray] | None = None
-        for date, means in _iter_day_means(day_list, weights, n_workers):
-            if prev is not None:
-                prev_date, prev_means = prev
-                if date == prev_date + pd.Timedelta(days=1):
-                    next_first = means[0:1]
-                else:
-                    next_first = nan_row
-                hours, stats = _hourly_stats(prev_means, next_first, prev_date)
-                hours_all.append(hours)
-                stats_all.append(stats)
-            prev = (date, means)
-        # Last day of the list (no lookahead available)
-        hours, stats = _hourly_stats(prev[1], nan_row, prev[0])
-        hours_all.append(hours)
-        stats_all.append(stats)
-
-        index = pd.DatetimeIndex(np.concatenate(
-            [h.to_numpy() for h in hours_all]))
-        full_index = pd.date_range(
-            f"{year}-01-01 00:00", f"{year}-12-31 23:00", freq="h")
-
-        frames = {}
-        for i_stat, stat in enumerate(STATS):
-            values = np.vstack([s[i_stat] for s in stats_all])
-            df = pd.DataFrame(values, index=index, columns=ids)
-            frames[stat] = df[~df.index.duplicated()].reindex(full_index)
-
-        if threshold > 0:
-            # Hours with a mean below the threshold are considered dry: all
-            # their statistics are zeroed (NaNs are preserved).
-            dry = frames["mean"] < threshold
-            for stat in STATS:
-                frames[stat] = frames[stat].mask(dry, 0.0)
+        if native:
+            frames = {NATIVE_VAR: _native_series(
+                day_list, weights, n_workers, ids, year, threshold,
+                threshold_mode)}
+            long_name = ("5-min catchment-average precipitation intensity "
+                         "(CombiPrecip)")
+        else:
+            frames = _hourly_frames(
+                day_list, weights, n_workers, ids, year, threshold)
+            long_name = ("hourly statistic of 5-min catchment-average "
+                         "precipitation intensity (CombiPrecip)")
 
         for stat, path in csv_paths.items():
             write_csv(frames[stat], path)
@@ -188,11 +188,99 @@ def extract_5min_stats(
                 frames,
                 nc_path,
                 units="mm h-1",
-                var_attrs={
-                    "long_name": "hourly statistic of 5-min catchment-average "
-                                 "precipitation intensity (CombiPrecip)",
-                },
+                var_attrs={"long_name": long_name},
             )
+
+
+def _hourly_frames(
+    day_list, weights, n_workers, ids, year: int, threshold: float
+) -> dict[str, pd.DataFrame]:
+    """
+    Hourly statistics of one year as (hours x catchments) frames, keyed by
+    the names in STATS.
+    """
+    nan_row = np.full((1, len(ids)), np.nan)
+    hours_all = []
+    stats_all = []
+    prev: tuple[pd.Timestamp, np.ndarray] | None = None
+    for date, means in _iter_day_means(day_list, weights, n_workers):
+        if prev is not None:
+            prev_date, prev_means = prev
+            if date == prev_date + pd.Timedelta(days=1):
+                next_first = means[0:1]
+            else:
+                next_first = nan_row
+            hours, stats = _hourly_stats(prev_means, next_first, prev_date)
+            hours_all.append(hours)
+            stats_all.append(stats)
+        prev = (date, means)
+    # Last day of the list (no lookahead available)
+    hours, stats = _hourly_stats(prev[1], nan_row, prev[0])
+    hours_all.append(hours)
+    stats_all.append(stats)
+
+    index = pd.DatetimeIndex(np.concatenate(
+        [h.to_numpy() for h in hours_all]))
+    full_index = pd.date_range(
+        f"{year}-01-01 00:00", f"{year}-12-31 23:00", freq="h")
+
+    frames = {}
+    for i_stat, stat in enumerate(STATS):
+        values = np.vstack([s[i_stat] for s in stats_all])
+        df = pd.DataFrame(values, index=index, columns=ids)
+        frames[stat] = df[~df.index.duplicated()].reindex(full_index)
+
+    if threshold > 0:
+        # Hours with a mean below the threshold are considered dry: all
+        # their statistics are zeroed (NaNs are preserved).
+        dry = frames["mean"] < threshold
+        for stat in STATS:
+            frames[stat] = frames[stat].mask(dry, 0.0)
+
+    return frames
+
+
+def _native_series(
+    day_list, weights, n_workers, ids, year: int, threshold: float,
+    threshold_mode: str,
+) -> pd.DataFrame:
+    """
+    The native 5-min catchment means of one year as a (steps x catchments)
+    frame, end-labeled {year}-01-01 00:00 ... {year}-12-31 23:55.
+    """
+    steps = pd.timedelta_range(0, periods=STEPS_PER_DAY, freq="5min")
+    index_all = []
+    values_all = []
+    for date, means in _iter_day_means(day_list, weights, n_workers):
+        index_all.append((date + steps).to_numpy())
+        values_all.append(means)
+
+    df = pd.DataFrame(
+        np.vstack(values_all),
+        index=pd.DatetimeIndex(np.concatenate(index_all)),
+        columns=ids,
+    )
+    # Missing days within the (extended) range become NaN.
+    df = df.reindex(pd.date_range(df.index[0], df.index[-1], freq="5min"))
+
+    if threshold > 0:
+        if threshold_mode == "hourly":
+            # All the steps of an hour whose mean is below the threshold are
+            # zeroed. Steps are assigned to the hour ending at or after them,
+            # as in the hourly statistics; the neighbouring days loaded around
+            # the year make the hourly means at the year boundaries exact.
+            hour_label = df.index.ceil("h")
+            hourly_mean = df.groupby(hour_label).mean()
+            dry = hourly_mean.reindex(hour_label).to_numpy() < threshold
+        else:
+            dry = df.to_numpy() < threshold
+        # NaN comparisons are False, so NaNs are preserved.
+        df = df.mask(dry, 0.0)
+
+    full_index = pd.date_range(
+        f"{year}-01-01 00:00", f"{year}-12-31 23:55", freq="5min")
+
+    return df.reindex(full_index)
 
 
 def read_day_zip(zip_path: str | Path, date: pd.Timestamp) -> np.ndarray:
